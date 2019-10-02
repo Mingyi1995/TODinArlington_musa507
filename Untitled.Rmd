@@ -1,0 +1,477 @@
+---
+title: "Indicators for Transit Oriented Development in Arlington, VA"
+author: "Mingyi He"
+date: "Sep 8, 2019"
+bibliography: library.bib
+output: 
+  html_document:
+    toc: true # table of content true
+    toc_depth: 2  # upto three depths of headings (specified by #, ## and ###)
+    number_sections: true  ## if you want number sections at each table header
+    theme: united  # many options for theme, this one is my favorite.
+    highlight: tango  # specifies the syntax highlighting style
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# What is TOD.
+In urban planning, a transit-oriented development (TOD) is a type of urban development that maximizes the amount of residential, business and leisure space within walking distance of public transport.[@calthorpe1993next][@cervero2004transit] In doing so, TOD aims to increase public transport ridership by reducing the use of private cars and by promoting sustainable urban growth.[@cervero2002transit]
+
+A TOD typically includes a central transit stop (such as a train station, or light rail or bus stop) surrounded by a high-density mixed-use area, with lower-density areas spreading out from this center. A TOD is also typically designed to be more walkable than other built-up areas, through using smaller block sizes and reducing the land area dedicated to automobiles.[@whatistod]
+
+The densest areas of a TOD are normally located within a radius of ¼ to ½ mile (400 to 800 m) around the central transit stop, as this is considered to be an appropriate scale for pedestrians, thus solving the last mile problem.
+
+# Setup
+Scripts to load neccessary packages, set up plot style and show numbers in a non-scientific notation way.
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidycensus)
+library(sf)
+library(FNN)
+library(jsonlite)
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(ggplot2)
+options(scipen=999)
+options(tigris_class = "sf")
+# FNN is a package that we use for measuring nearest neighbor distance. 
+# jsonlite is used to access data via open data APIs. 
+# knitr and kableExtra are used to create tables
+
+mapTheme <- function(base_size = 12) {
+  theme(
+    text = element_text( color = "black"),
+    plot.title = element_text(size = 24,colour = "black"),
+    plot.subtitle=element_text(face="italic"),
+    plot.caption=element_text(hjust=0),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "black", fill=NA, size=2),
+    strip.text.x = element_text(size = 14))
+}
+
+plotTheme <- function(base_size = 12) {
+  theme(
+    text = element_text( color = "black"),
+    plot.title = element_text(size = 24,colour = "black"),
+    plot.subtitle = element_text(face="italic"),
+    plot.caption = element_text(hjust=0),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    panel.grid.major = element_line("grey80", size = 0.1),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "black", fill=NA, size=2),
+    strip.background = element_rect(fill = "grey80", color = "white"),
+    strip.text = element_text(size=12),
+    axis.title = element_text(size=12),
+    axis.text = element_text(size=10),
+    plot.background = element_blank(),
+    legend.background = element_blank(),
+    legend.title = element_text(colour = "black", face = "italic"),
+    legend.text = element_text(colour = "black", face = "italic"),
+    strip.text.x = element_text(size = 14)
+  )
+}
+
+qBr <- function(df, variable, rnd) {
+  if (missing(rnd)) {
+    as.character(quantile(round(df[[variable]],0),
+                          c(.01,.2,.4,.6,.8), na.rm=T))
+  } else if (rnd == FALSE | rnd == F) {
+    as.character(formatC(quantile(df[[variable]]), digits = 3),
+                 c(.01,.2,.4,.6,.8), na.rm=T)
+  }
+}
+
+q5 <- function(variable) {as.factor(ntile(variable, 5))}
+
+palette5 <- c("#f0f9e8","#bae4bc","#7bccc4","#43a2ca","#0868ac")
+```
+
+# Downloading & Wrangling Census Tract Open Data  
+
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+library(knitr)
+library(kableExtra)
+library(readr)
+dt <- read_csv("variable.csv")
+dt %>%
+  kable() %>%
+  kable_styling()
+```
+Download Arlington County's data at census tract level in 2000. Check a proper project coordination [here](https://epsg.io/).
+```{r message=FALSE, warning=FALSE}
+census_api_key("YOUR API KEY")
+```
+
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+census_api_key("270082da749af57396e061417ed72737fec5d025")
+```
+
+```{r results='hide',message=FALSE,warning=FALSE}
+
+indicator = c("P001001","P006002","PCT025050",
+              "PCT025009","P053001","H056001",
+              "P092001")
+
+tracts00 <- get_decennial(geography = "tract", variables = indicator, year = 2000,
+                    state = "VA",county = "Arlington", geometry = TRUE) %>% 
+  st_transform(102346)
+```
+
+Extract the population data and name it as totalPop00, use ggplot2 package to plot it, and break the values in the quantile break way.
+```{r message=FALSE,warning=FALSE}
+totalPop00 <-
+  tracts00 %>%
+  filter(variable == "P001001")
+
+
+ggplot() +
+  geom_sf(data = totalPop00, mapping = aes(fill = q5(value))) +
+  scale_fill_manual(values = palette5,
+                    labels = qBr(totalPop00, "value"),
+                    name = "Total\nPopluation\n(Quintile Breaks)") +
+  labs(title = "Total Population",
+       subtitle = "Varlington; 2000") +
+  mapTheme()
+```
+
+Spread the dataframe, rename the columns name, and calculate the the percentage of white, bachelor and poverty, and standardize population by census tract area.
+```{r message=FALSE,warning=FALSE}
+tracts00 <- 
+  tracts00 %>%
+  dplyr::select(-NAME) %>%
+  spread(variable, value)
+
+tracts00 <- 
+  tracts00 %>%
+  rename(TotalPop = P001001,
+         NumberWhites = P006002,
+         TotalFemaleBachelors = PCT025050,
+         TotalMaleBachelors = PCT025009,
+         MedHHInc = P053001,
+         MedRent = H056001,
+         TotalPoverty = P092001)
+
+tracts00$area_sqkm <- st_area(tracts00) 
+tracts00$area_sqkm <- as.integer(tracts00$area_sqkm) / 1000000
+tracts00$StandPop <- tracts00$TotalPop / tracts00$area_sqkm
+
+tracts00 <- 
+  tracts00 %>%
+  mutate(percentWhite = ifelse(TotalPop > 0, NumberWhites / TotalPop,0),
+         percentBachelors = ifelse(TotalPop > 0, ((TotalFemaleBachelors + TotalMaleBachelors) / TotalPop),0),
+         percentPoverty = ifelse(TotalPop > 0, TotalPoverty / TotalPop, 0),
+         year = "2000") %>%
+  dplyr::select(-NumberWhites,-TotalFemaleBachelors,-TotalMaleBachelors,-TotalPoverty)
+```
+
+Download the data in 2017 and apply the same pipeline the wrangle it.
+```{r results='hide',message=FALSE,warning=FALSE}
+tracts17 <- get_acs(geography = "tract", variables = c("B25026_001E","B02001_002E","B15001_050E",
+                                                       "B15001_009E","B19013_001E","B25058_001E",
+                                                       "B06012_002E"), year = 2017,
+                          state = "VA",county = "Arlington", geometry = TRUE) %>% 
+  st_transform(102346)%>%
+  dplyr::select(variable, estimate, GEOID) %>%
+  spread(variable, estimate) %>%
+  rename(TotalPop = B25026_001,
+         NumberWhites = B02001_002,
+         TotalFemaleBachelors = B15001_050,
+         TotalMaleBachelors = B15001_009,
+         MedHHInc = B19013_001,
+         MedRent = B25058_001,
+         TotalPoverty = B06012_002) %>%
+  mutate(percentWhite = ifelse(TotalPop > 0, NumberWhites / TotalPop,0),
+         percentBachelors = ifelse(TotalPop > 0, ((TotalFemaleBachelors + TotalMaleBachelors) / TotalPop),0),
+         percentPoverty = ifelse(TotalPop > 0, TotalPoverty / TotalPop, 0),
+         year = "2017") %>%
+  dplyr::select(-NumberWhites, -TotalFemaleBachelors, -TotalMaleBachelors, -TotalPoverty) 
+
+tracts17$area_sqkm <- st_area(tracts17) 
+tracts17$area_sqkm <- as.integer(tracts17$area_sqkm) / 1000000
+tracts17$StandPop <- tracts17$TotalPop / tracts17$area_sqkm
+```
+
+Combine the 2000 and 2017 data.
+```{r message=FALSE,warning=FALSE}
+allTracts <- 
+  rbind(
+    as.data.frame(tracts00), 
+    as.data.frame(tracts17)) %>%
+  st_sf()
+```
+
+# Download and Wrangle Metro Data
+
+Download the infrastructure data from Arlington's open data portal which includes schools, hospitals, metro stations, and etc. In this case, we only need metro stations, thus, we use `filter` to select.
+```{r message=FALSE, warning=FALSE}
+MetroStops <- fromJSON("https://opendata.arcgis.com/datasets/b516a5a71b9b4d67b3f7e26957a923bc_0.geojson")
+MetroStops <- as.data.frame(MetroStops$features)
+MetroStops <- flatten(MetroStops)
+MetroStops <- filter(MetroStops, properties.CODE == 'Metro Station')
+```
+
+```{r echo=FALSE,message=FALSE, warning=FALSE}
+MetroStops[1:4,] %>%
+  kable() %>%
+  kable_styling()
+```
+
+Split the list in the geometry column and project it the the coordination same as *tract00*.
+```{r message=FALSE, warning=FALSE}
+coord <- do.call(rbind, MetroStops$geometry.coordinates)
+colnames(coord) <- c("x","y")
+MetroStops <- cbind(MetroStops[c("properties.NAME","properties.SYMBOL")], coord)
+
+septa.sf <- 
+  st_as_sf(MetroStops, coords = c('x','y'), crs = 4326, agr = "constant") %>%
+  st_transform(st_crs(tracts00))
+```
+
+```{r message=FALSE, warning=FALSE}
+ggplot() + 
+  geom_sf(data=tracts00) +
+  geom_sf(data=septa.sf, show.legend = "point", size= 2) +
+  scale_colour_manual(name="Quintile\nBreaks") +
+  labs(title="Metro Stations",
+       subtitle="Arlington, VA",
+       caption="`Public Policy Analytics - Figure 2.6") +
+  mapTheme()
+```
+
+Creat 800m's buffer for each metro station, the unit for coor ESRI:102346 is meter. 
+```{r message=FALSE, warning=FALSE}
+septaBuffer <- 
+  st_buffer(septa.sf, 800) %>%
+  mutate(Legend = "Buffer") %>%
+  dplyr::select(Legend)
+
+septaBufferUnion <- 
+  septaBuffer %>%
+  st_union() %>%
+  st_sf() %>%
+  mutate(Legend = "Unioned Buffer") 
+
+septaBuffers <- rbind(septaBuffer,septaBufferUnion)
+
+ggplot() + 
+  geom_sf(data=st_union(tracts00), aes()) +
+  geom_sf(data=septaBuffers) +
+  geom_sf(data=septa.sf, show.legend = "point") +
+  facet_wrap(~Legend) +
+  scale_colour_manual(values = c("orange","blue"),
+                      name="Septa\nLines") +
+  labs(title="Metro Stations (Buffered & Unioned), 800m",
+       subtitle="Arlington, VA",
+       caption="Public Policy Analytics - Figure 2.7") +
+  mapTheme() +
+  theme(strip.text.x = element_text(size = 14))
+```
+
+Intersect the census tract with buffer zone, and the select the census tracts intersect with the buffer zone. And label each census tract as TOD or Non-TOD.
+```{r message=FALSE, warning=FALSE}
+allTracts.group <- 
+  rbind(
+    st_centroid(allTracts)[septaBufferUnion,] %>%
+      st_set_geometry(NULL) %>%
+      left_join(allTracts) %>%
+      st_sf() %>%
+      mutate(TOD_Group = "TOD"),
+    st_centroid(allTracts)[septaBufferUnion, op = st_disjoint] %>%
+      st_set_geometry(NULL) %>%
+      left_join(allTracts) %>%
+      st_sf() %>%
+      mutate(TOD_Group = "Non-TOD"))
+
+ggplot() + 
+  geom_sf(data = allTracts.group, aes(fill = TOD_Group)) +
+  facet_wrap(~year) +
+  scale_fill_manual(values = c("#bae4bc", "#0868ac")) +
+  labs(title = "Time/Space groups") +
+  mapTheme()
+```
+
+Remove NAN Value.
+```{r message=FALSE, warning=FALSE}
+na.omit(allTracts.group) %>%
+  mutate(MedRent.inf = ifelse(year == "2000", MedRent * 1.42, MedRent)) %>%
+  ggplot() + 
+  geom_sf(data = st_union(allTracts)) +
+  geom_sf( aes(fill = q5(MedRent.inf), colour = TOD_Group)) +
+  facet_wrap(~year) +
+  scale_fill_manual(values = palette5,
+                    labels = qBr(tracts00, "MedRent"),
+                    name = "Rent\n(Quintile Breaks)") + 
+  scale_colour_manual(values = c("gray36", "red")) +
+  labs(title="Median rent, 2000 - 2017",
+       subtitle="Real dollars; Arlington, VA",
+       caption="Public Policy Analytics - Figure 2.8") +
+  mapTheme()
+```
+
+```{r message=FALSE, warning=FALSE}
+allTracts.group.Summary <- 
+  allTracts.group %>%
+  mutate(MedRent = ifelse(year == "2000", MedRent * 1.42, MedRent)) %>%
+  group_by(year, TOD_Group) %>%
+  summarize(Rent = mean(MedRent, na.rm = T),
+            Population_person_KM2 = mean(StandPop, na.rm = T),
+            Percent_White = mean(percentWhite, na.rm = T),
+            Percent_Bachelors = mean(percentBachelors, na.rm = T),
+            Percent_Poverty = mean(percentPoverty, na.rm = T)) %>%
+  st_set_geometry(NULL)
+
+
+kable(allTracts.group.Summary,
+      caption = "TOD Indicators") %>%
+  kable_styling()
+```
+
+```{r message=FALSE, warning=FALSE}
+allTracts.group.Summary %>%
+  unite(year.TOD_Group, year, TOD_Group, sep = ": ", remove = T) %>%
+  gather(Variable, Value, -year.TOD_Group) %>%
+  mutate(Value = round(Value,2)) %>%
+  spread(year.TOD_Group, Value) %>%
+  kable(caption = "TOD Indicators") %>%
+  kable_styling()
+```
+
+```{r message=FALSE, warning=FALSE}
+allTracts.group.Summary %>%
+  gather(Variable, Value, -year, -TOD_Group) %>%
+  ggplot(aes(TOD_Group, Value, fill = year)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  facet_wrap(~Variable, scales = "free") +
+  scale_fill_manual(values = c("#bae4bc", "#0868ac")) +
+  labs(title = "Indicator differences across time and space") +
+  plotTheme()
+```
+
+### Submarket
+A metro station in Arlington can belong to Yellow/Blue Line, Oring/Silver Line, Blue line or Orange/Blue/Silver Line Station. Obviously, the one belong to Orange/Blue/Silver Line Station is the city center, and to simplify the result, I group the station which belong to Blue Line same into the Yellow/Blue Line group.
+```{r message=FALSE, warning=FALSE}
+
+septa.sf$properties.SYMBOL[septa.sf$properties.SYMBOL == "Metro Blue Line Station"] <- "Metro Yellow/Blue Line Station"
+
+centerCity.Buffer <-
+  filter(septa.sf, properties.SYMBOL == "Metro Orange/Blue/Silver Line Station") %>%
+  st_buffer(800) %>%
+  st_union() %>%
+  st_sf() %>%
+  mutate(Submarket = "Center City")
+
+OL.Buffer <-
+  filter(septa.sf, properties.SYMBOL == "Metro Orange/Silver Line Station") %>%
+  st_buffer(800) %>%
+  st_union() %>%
+  st_sf() %>%
+  st_difference(centerCity.Buffer) %>%
+  mutate(Submarket = "OL")
+
+YB.Buffer <-
+  filter(septa.sf, properties.SYMBOL == "Metro Yellow/Blue Line Station") %>%
+  st_buffer(800) %>%
+  st_union() %>%
+  st_sf() %>%
+  st_difference(centerCity.Buffer) %>%
+  mutate(Submarket = "YB")
+
+threeBuffers <- 
+  rbind(centerCity.Buffer, OL.Buffer, YB.Buffer) %>%
+  dplyr::select(Submarket)
+
+allTracts.threeBuffers <-
+  st_join(st_centroid(allTracts), threeBuffers) %>%
+  st_set_geometry(NULL) %>%
+  left_join(allTracts) %>%
+  mutate(Submarket = replace_na(Submarket, "Non-TOD")) %>%
+  st_sf() 
+
+```
+A brief function to put multi plots in the same page.
+```{r message=FALSE, warning=FALSE}
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+ 
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+ 
+  numPlots = length(plots)
+ 
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+ 
+ if (numPlots==1) {
+    print(plots[[1]])
+ 
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+ 
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+ 
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+p1 <- ggplot() +
+  geom_sf(data = st_union(tracts00)) +
+  geom_sf(data = threeBuffers, aes(fill = Submarket)) +
+  scale_fill_manual(values = c("orange","green4","blue"),
+                    name="Submarket") +
+  labs(title = "3 Submarkets") +
+  mapTheme()
+
+p2 <- ggplot() + 
+  geom_sf(data = allTracts.threeBuffers, aes(fill=Submarket)) +
+  scale_fill_manual(values = c("orange","green4","blue","black"),
+                    name="Submarket") +
+  labs(title = "Tracts by submarkets") +
+  mapTheme()
+
+multiplot(p1, p2, cols=2)
+```
+
+```{r message=FALSE, warning=FALSE}
+allTracts.threeBuffers %>%
+  mutate(MedRent = ifelse(year == "2000", MedRent * 1.42, MedRent)) %>%
+  group_by(year, Submarket) %>%
+  summarize(Rent = mean(MedRent, na.rm = T),
+            Population_person_KM2 = mean(StandPop, na.rm = T),
+            Percent_White = mean(percentWhite, na.rm = T),
+            Percent_Bachelors = mean(percentBachelors, na.rm = T),
+            Percent_Poverty = mean(percentPoverty, na.rm = T)) %>%
+  st_set_geometry(NULL) %>%
+  gather(Variable, Value, -year, -Submarket) %>%
+  ggplot(aes(Submarket, Value, fill = year)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  facet_wrap(~Variable, scales = "free") +
+  scale_fill_manual(values = c("#bae4bc", "#0868ac")) +
+  labs(title = "Indicator differences across time and submarkets") +
+  plotTheme() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+# Conclusion
+Arlington county is regarded as the one of the best examples of TOD planning, and this project has lasts more than 30 years. Comparing the standardized population in TOP and non-TOD tracts, we can tell that from 2000 to 2017, the population density increased significantly, and the value is always higher in TOD tracts. But the gap of rent between TOD and non-TOD tracts are not obvious. As the determining factors of rent are not only location, but also residential area quality such as size and surroundings. In the TOD area, residences are mote likely to be apartments instead of houses which usually have higher floor area ratio and smaller single unit area. Thus, rent can be lower than those spacious houses. TOD tracts have higher bachelor ratio, and considering there is no significant difference in the rent, we can assume that well-educated people prefer to live in the TOD area. 
+
+# References

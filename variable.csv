@@ -1,0 +1,8 @@
+Variable,Census_name_in_2000,Census_name_in_2017,Short_name
+Total,Population,P001001,B25026_001E,TotalPop
+Number of white,residents,P006002,B02001_002E,NumberWhites
+Total: Female: 18 to 24,years:,Bachelor’s degree,PCT025050,B15001_050E,TotalFemaleBachelors
+Total: Male: 18 to 24,years:,Bachelor’s degree,PCT025009,B15001_009E,TotalMaleBacheors
+Median Household Income,P053001,B19013_001E,MedHHInc
+Median contract Rent,H056001,B25058_001E,MedRent
+Total living in Poverty,P092001,B06012_002E,TotalPoverty
